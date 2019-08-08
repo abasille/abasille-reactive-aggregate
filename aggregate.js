@@ -1,7 +1,13 @@
+/**
+ * @param {Meteor.publish} sub
+ * @param {Mongo.Collection} collection
+ * @param {Object[]} pipeline
+ * @param {Object[]} options
+ * @constructor
+ */
 export const ReactiveAggregate = (sub, collection = null, pipeline = [], options = {}) => {
   import { Meteor } from 'meteor/meteor';
   import { Mongo } from 'meteor/mongo';
-  import { Promise } from 'meteor/promise';
 
   // Define new Meteor Error type
   const TunguskaReactiveAggregateError = Meteor.makeErrorType('tunguska:reactive-aggregate', function(msg) {
@@ -24,7 +30,22 @@ export const ReactiveAggregate = (sub, collection = null, pipeline = [], options
     throw new TunguskaReactiveAggregateError('"options" must be an object');
   }
 
-  // Set up local options based on defaults and supplied options
+  /**
+   * Set up local options based on defaults and supplied options.
+   *
+   * @type {Object}
+   * @property {boolean} [noAutomaticObserver=false]
+   * @property {Object} aggregationOptions: {},
+   * @property {Object} observeSelector: {},
+   * @property {Object} observeOptions: {},
+   * @property {Object[]} observers - cursor1, ... cursorn
+   * @property {number} [debounceCount=0],
+   * @property {number} [debounceDelay=0] - mS
+   * @property {string} clientCollection - collection._name,
+   * @property {string} [docsPropName] - Set with the name of the prop containing the docs, if not on ROOT of the
+   * aggregation result.
+   * @property {string} [clientExtrasCollection='ReactiveAggregate'] - collection._name,
+   */
   const localOptions = {
     ...{
       noAutomaticObserver: false,
@@ -35,6 +56,8 @@ export const ReactiveAggregate = (sub, collection = null, pipeline = [], options
       debounceCount: 0,
       debounceDelay: 0, // mS
       clientCollection: collection._name,
+      docsPropName: undefined,
+      clientExtrasCollection: 'ReactiveAggregate',
     },
     ...options
   };
@@ -78,8 +101,8 @@ export const ReactiveAggregate = (sub, collection = null, pipeline = [], options
   if (typeof localOptions.clientCollection !== 'string') {
     throw new TunguskaReactiveAggregateError('"options.clientCollection" must be a string');
   }
-  
-  
+
+
   // Warn about deprecated parameters if used
   if (Object.keys(localOptions.observeSelector).length != 0) console.log('tunguska:reactive-aggregate: observeSelector is deprecated');
   if (Object.keys(localOptions.observeOptions).length != 0) console.log('tunguska:reactive-aggregate: observeOptions is deprecated');
@@ -87,14 +110,39 @@ export const ReactiveAggregate = (sub, collection = null, pipeline = [], options
   // observeChanges() will immediately fire an "added" event for each document in the cursor
   // these are skipped using the initializing flag
   let initializing = true;
+
   sub._ids = {};
   sub._iteration = 1;
 
-  const update = () => {
+  const update = async () => {
     if (initializing) return;
     // add and update documents on the client
     try {
-      const docs = Promise.await(collection.rawCollection().aggregate(pipeline, localOptions.aggregationOptions).toArray());
+      const aggregationResult =  await collection.rawCollection().aggregate(pipeline, localOptions.aggregationOptions)
+        .toArray();
+      console.log(aggregationResult);
+      const docs = localOptions.docsPropName
+        ? aggregationResult[0][localOptions.docsPropName]
+        : aggregationResult;
+      const extras = {};
+      let initializingExtras = true;
+
+      if (localOptions.docsPropName) {
+        Object.keys(aggregationResult[0])
+          .forEach((extraPropName) => {
+            if (extraPropName !== localOptions.docsPropName) {
+              extras[extraPropName] = aggregationResult[0][extraPropName];
+            }
+          });
+
+        if (initializingExtras) {
+          sub.added(localOptions.clientExtrasCollection, sub._subscriptionId, extras);
+        } else {
+          sub.changed(localOptions.clientExtrasCollection, sub._subscriptionId, extras);
+        }
+        initializingExtras = false;
+      }
+
       docs.forEach(doc => {
         if (!sub._ids[doc._id]) {
           sub.added(localOptions.clientCollection, doc._id, doc);
@@ -148,7 +196,7 @@ export const ReactiveAggregate = (sub, collection = null, pipeline = [], options
     }));
   });
   // End of the setup phase. We don't need to do any of that again!
-  
+
   // Clear the initializing flag. From here, we're on autopilot
   initializing = false;
   // send an initial result set to the client

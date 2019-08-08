@@ -1,7 +1,7 @@
 Package.describe({
-  name: 'tunguska:reactive-aggregate',
+  name: 'abasille:reactive-aggregate',
   version: '1.2.0',
-  summary: 'Publish aggregations reactively',
+  summary: 'Publish aggregations reactively with $facet support',
   git: 'https://github.com/abasille/abasille-reactive-aggregate',
   documentation: 'README.md'
 });
